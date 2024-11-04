@@ -3,14 +3,15 @@ from PIL import Image
 import numpy as np
 import cv2
 from streamlit_image_comparison import image_comparison
+import random
 
-intensity = np.arange
 
 class Filter:
 
     @staticmethod
-    def apply_gaussian_blur(img_array, intensity=np.arange(1,255,3)):
-        return cv2.GaussianBlur(img_array, (intensity, intensity), 0)
+    def apply_gaussian_blur(img_array, kernel_size=15, sigmaX=15):
+        return cv2.GaussianBlur(img_array, (kernel_size, kernel_size), sigmaX=sigmaX)
+
 
     @staticmethod
     def color2gray(img_array, intensity=np.arange(1,255,3)):
@@ -44,6 +45,7 @@ st.title("Image Filtering App")
 
 uploaded_file = st.file_uploader("Choose an image...", type=["jpg", "png", "jpeg"])    
 
+
 if uploaded_file is not None:
     original_image = Image.open(uploaded_file)
     img_array = np.array(original_image.convert("RGB"))
@@ -59,35 +61,39 @@ if uploaded_file is not None:
 
     st.image(original_image, caption="Original Image", use_column_width=True)
     
+    
     for filter_name, filter_info in filters.items():
         col1, col2 = st.columns([1, 4])
-
-        # Generate preview image for each filter
+    
         if filter_info["intensity"]:
-            preview_img = filter_info["func"](img_array, intensity=5)
+            if filter_name == "Gaussian Blur":
+                sigmaX = st.slider(f"{filter_name} Intensity:", 0, 255, 15, key=f"{filter_name}_sigma")
+                kernel_size = st.slider(f"Degree of {filter_name} Blurring:", 1, 51, 15, step=2, key=f"{filter_name}_kernel")
+                preview_img = filter_info["func"](img_array, kernel_size=kernel_size, sigmaX=sigmaX)
+            else:
+                intensity = st.slider(f"{filter_name} Intensity:", 1, 50, 3, key=filter_name)
+                preview_img = filter_info["func"](img_array, intensity)
         else:
             preview_img = filter_info["func"](img_array)
-
-        # Ensure grayscale images are displayed as RGB
+    
+    
         if len(preview_img.shape) == 2:
             preview_img = np.stack([preview_img] * 3, axis=-1)
-
-        preview_image = Image.fromarray(preview_img).resize((75, 75))
-
+    
+        preview_image = Image.fromarray(preview_img).resize((100, 80))
+    
         with col1:
             st.image(preview_image, caption=f"{filter_name} Preview")
-
+    
         with col2:
-            if filter_info["intensity"]:
-                intensity = st.slider(f"{filter_name} Intensity:", 1, 50, 5, key=filter_name)
-            else:
-                intensity = None
-
             if st.button(f"Apply {filter_name}", key=f"button_{filter_name}"):
-                if intensity is not None:
+                if filter_name == "Gaussian Blur":
+                    filtered_array = filter_info["func"](img_array, kernel_size=kernel_size, sigmaX=sigmaX)
+                elif filter_info["intensity"]:
                     filtered_array = filter_info["func"](img_array, intensity)
                 else:
                     filtered_array = filter_info["func"](img_array)
-
+    
                 filtered_image = Image.fromarray(filtered_array)
                 image_comparison(img1=original_image, img2=filtered_image, label1="Original", label2=filter_name)
+    
