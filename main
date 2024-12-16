@@ -1,37 +1,18 @@
-import streamlit as st
-from PIL import Image
+import customtkinter as ctk
+from PIL import Image, ImageTk
 import numpy as np
 import cv2
-from streamlit_image_comparison import image_comparison
-import random
-from collections import deque, Counter
 
-class ColorDetector:
-    @staticmethod
-    def detect_dominant_colors(img_array, num_colors=5):
-        # Reshape the image to be a list of pixels
-        pixels = img_array.reshape(-1, 3)
-        
-        # Use K-means to find dominant colors
-        criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 100, 0.2)
-        _, labels, centers = cv2.kmeans(
-            pixels.astype(np.float32), 
-            num_colors, 
-            None, 
-            criteria, 
-            10, 
-            cv2.KMEANS_RANDOM_CENTERS
-        )
-        
-        # Count occurrences of each color
-        unique, counts = np.unique(labels, return_counts=True)
-        color_frequencies = dict(zip(unique, counts))
-        
-        # Sort colors by frequency
-        dominant_colors = [centers[i].astype(int) for i in sorted(color_frequencies, key=color_frequencies.get, reverse=True)]
-        
-        return dominant_colors
 
+ctk.set_appearance_mode("dark")
+ctk.set_default_color_theme("blue")
+
+
+img_array = None
+original_image = None
+filtered_image = None  
+
+# Filters Class
 class Filter:
     @staticmethod
     def apply_gaussian_blur(img_array, kernel_size=15, sigmaX=15):
@@ -64,145 +45,148 @@ class Filter:
     def pencil_sketch(img_array):
         sketch_gray, sketch_color = cv2.pencilSketch(img_array, sigma_s=20, sigma_r=0.1, shade_factor=0.01)
         return sketch_color
- 
+
     @staticmethod
     def vivid(img_array):
         hsv = cv2.cvtColor(img_array, cv2.COLOR_BGR2HSV)
-        hsv[:, :, 1] = np.clip(hsv[:, :, 1] * 1.3, 0, 255)  # Increase saturation
+        hsv[:, :, 1] = np.clip(hsv[:, :, 1] * 1.3, 0, 255)
         return cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
 
     @staticmethod
     def dream(img_array):
         return cv2.GaussianBlur(img_array, (21, 21), 10)
 
-    @staticmethod
-    def color_replace(img_array, original_color, replacement_color, tolerance=30):
-        img_array = np.array(img_array)
-        mask = np.all(np.abs(img_array - original_color) <= tolerance, axis=-1)
 
-        # Convert colors to numpy arrays
-        original_color = np.array(original_color)
-        replacement_color = np.array(replacement_color)
-        
-        # Replace those pixels
-        img_array[mask] = replacement_color
-        
-        return img_array
+# Update Canvas
+def update_canvas(image_array):
+    global canvas, filtered_image
+    filtered_image = image_array
+    image = Image.fromarray(image_array)
+    ctk_image = ctk.CTkImage(light_image=image, size=(600, 400))
+    canvas.configure(image=ctk_image)
+    canvas.image = ctk_image
 
-def main():
-    st.title("🖼️ Advanced Image Processing App")
-    
-    # Sidebar for file upload and processing
-    st.sidebar.header("Image Processing Toolkit")
-    uploaded_file = st.sidebar.file_uploader(
-        "Upload an Image", 
-        type=["jpg", "png", "jpeg"], 
-        help="Supports JPG, PNG, and JPEG formats"
+def update_filters(category):
+    filter_options = {
+        "General": ["Gaussian Blur", "Grayscale", "Emboss", "Bilateral", "Edge Detection", "Sepia", "Pencil Sketch"],
+        "Instagram": ["Vivid", "Dream"]
+    }
+
+    # Update the dropdown menu with relevant filter options
+    filters.configure(values=filter_options.get(category, []))
+    filters.set("Select a Filter")
+
+# Apply Filter
+def apply_filter(category, filter_name, intensity):
+    global img_array, filtered_image
+    if img_array is None:
+        return
+
+    # Use the original image for applying filters
+    base_image = original_image if original_image is not None else img_array
+
+    filters = {
+        "General": {
+            "Gaussian Blur": lambda img: Filter.apply_gaussian_blur(img, kernel_size=int(intensity)),
+            "Grayscale": Filter.color2gray,
+            "Emboss": Filter.emboss,
+            "Bilateral": lambda img: Filter.bilateral(img, intensity=int(intensity)),
+            "Edge Detection": Filter.edge_detection,
+            "Sepia": Filter.sepia,
+            "Pencil Sketch": Filter.pencil_sketch,
+        },
+        "Instagram": {
+            "Vivid": Filter.vivid,
+            "Dream": Filter.dream,
+        }
+    }
+
+    try:
+        selected_filter = filters[category][filter_name]
+        if filtered_image is not None:
+            filtered_image = selected_filter(filtered_image) 
+        else:
+            filtered_image = selected_filter(np.array(base_image.convert("RGB")))  
+        update_canvas(filtered_image)
+ 
+    except KeyError:
+        pass
+
+
+# Load Image
+def load_image():
+    global img_array, original_image, filtered_image
+    file_path = ctk.filedialog.askopenfilename(
+        filetypes=[("Image Files", "*.jpg;*.jpeg;*.png")]
     )
+    if file_path:
+        image = Image.open(file_path)
+        original_image = image  
+        img_array = np.array(image.convert("RGB"))
+        filtered_image = None  
+        update_canvas(img_array)
 
-    if uploaded_file is not None:
-        # Read image
-        original_image = Image.open(uploaded_file)
-        img_array = np.array(original_image.convert("RGB"))
 
-        # Sidebar processing options
-        processing_type = st.sidebar.selectbox(
-            "Processing Category", 
-            ["Image Filters", "Color Manipulation"]
-        )
+def reset_image():
+    global original_image, filtered_image
+    if original_image:
+        filtered_image = None  
+        update_canvas(np.array(original_image.convert("RGB")))
 
-        if processing_type == "Image Filters":
-            # Restore previous filter categories
-            filter_category = st.sidebar.selectbox(
-                "Choose Filter Category:", 
-                ["General", "Instagram"]
-            )
 
-            filters = {
-                "General": {
-                    "Gaussian Blur": Filter.apply_gaussian_blur,
-                    "Grayscale": Filter.color2gray,
-                    "Emboss": Filter.emboss,
-                    "Bilateral": Filter.bilateral,
-                    "Edge Detection": Filter.edge_detection,
-                    "Sepia": Filter.sepia,
-                    "Pencil sketch": Filter.pencil_sketch
-                },
-                "Instagram": {
-                    "Vivid": Filter.vivid,
-                    "Dream": Filter.dream
-                }
-            }
+# Main Application
+root = ctk.CTk()
+root.title("Advanced Image Processing App")
+root.geometry("1200x800")
 
-            selected_filter = st.sidebar.selectbox(
-                "Select a Filter:", 
-                list(filters[filter_category].keys())
-            )
-            
-            # Intensity slider for certain filters
-            intensity = st.sidebar.slider("Adjust Intensity", 1, 100, 50) \
-                if selected_filter in ["Gaussian Blur", "Bilateral"] else None
+# Sidebar
+sidebar = ctk.CTkFrame(root, width=250)
+sidebar.grid(row=0, column=0, sticky="nsew")
 
-            if st.sidebar.button("Apply Filter"):
-                # Get and apply filter
-                filter_func = filters[filter_category][selected_filter]
-                
-                if selected_filter == "Gaussian Blur":
-                    filtered_img = filter_func(
-                        img_array, 
-                        kernel_size=intensity if intensity % 2 == 1 else intensity + 1
-                    )
-                elif selected_filter == "Bilateral":
-                    filtered_img = filter_func(img_array, intensity)
-                else:
-                    filtered_img = filter_func(img_array)
-                
-                # Compare images
-                st.image(filtered_img, caption=f"Processed: {selected_filter}")
+# Sidebar Layout
+sidebar.grid_rowconfigure(0, weight=1)
+sidebar.grid_rowconfigure(1, weight=4)
+sidebar.grid_rowconfigure(2, weight=1)
 
-        if processing_type == "Color Manipulation":
-            # Detect dominant colors
-            dominant_colors = ColorDetector.detect_dominant_colors(img_array)
-            
-            # Display dominant colors
-            st.sidebar.subheader("Top 5 Dominant Colors")
-            for idx, color in enumerate(dominant_colors):
-                st.sidebar.write(f"Color {idx + 1}: RGB{tuple(color)}")
+# Image Upload
+upload_button = ctk.CTkButton(
+    sidebar, text="Upload Image", command=load_image
+)
+upload_button.grid(row=0, column=0, pady=20, padx=20)
 
-            # Color replacement UI
-            st.sidebar.subheader("Color Replacement")
-            color_to_replace_index = st.sidebar.selectbox(
-                "Select Color to Replace", 
-                range(5), 
-                format_func=lambda x: f"RGB{tuple(dominant_colors[x])}"
-            )
-            
-            color_to_replace = dominant_colors[color_to_replace_index]
-            
-            # Color picker for replacement
-            replacement_color = st.sidebar.color_picker("Choose Replacement Color")
-            
-            # Convert hex to RGB
-            replacement_color_rgb = tuple(int(replacement_color[i:i+2], 16) for i in (1, 3, 5))
+# Filter Options
+category_label = ctk.CTkLabel(sidebar, text="Filter Category")
+category_label.grid(row=1, column=0, sticky="n", pady=10)
 
-            # Tolerance slider
-            tolerance = st.sidebar.slider("Color Similarity Tolerance", 1, 100, 30)
-            
-            if st.sidebar.button("Replace Color"):
-                # Apply color replacement
-                replaced_img = Filter.color_replace(
-                    img_array.copy(), 
-                    color_to_replace, 
-                    replacement_color_rgb, 
-                    tolerance
-                )
-                
-                # Display results
-                st.image(replaced_img, caption="Color Replaced Image")
+filter_category = ctk.CTkOptionMenu(
+    sidebar, values=["General", "Instagram"], command=lambda val: update_filters(val)
+)
+filter_category.grid(row=2, column=0, pady=10)
 
-        # Always show original image
-        st.header("Original Image")
-        st.image(original_image, use_column_width=True)
+filters = ctk.CTkOptionMenu(sidebar, values=["Select a Filter"])
+filters.grid(row=3, column=0, pady=10)
 
-if __name__ == "__main__":
-    main()
+intensity_slider = ctk.CTkSlider(sidebar, from_=1, to=100)
+intensity_slider.set(50)
+intensity_slider.grid(row=4, column=0, pady=10)
+
+apply_button = ctk.CTkButton(
+    sidebar, text="Apply Filter", command=lambda: apply_filter(
+        filter_category.get(), filters.get(), intensity_slider.get()
+    )
+)
+apply_button.grid(row=5, column=0, pady=10)
+
+reset_button = ctk.CTkButton(
+    sidebar, text="Reset Image", command=reset_image
+)
+reset_button.grid(row=6, column=0, pady=10)
+
+# Main Canvas
+main_frame = ctk.CTkFrame(root)
+main_frame.grid(row=0, column=1, sticky="nsew")
+canvas = ctk.CTkLabel(main_frame, text="")
+canvas.pack(fill="both", expand=True)
+
+root.grid_columnconfigure(1, weight=1)
+root.mainloop()
