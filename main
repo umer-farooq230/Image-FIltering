@@ -4,7 +4,33 @@ import numpy as np
 import cv2
 from streamlit_image_comparison import image_comparison
 import random
-from collections import deque
+from collections import deque, Counter
+
+class ColorDetector:
+    @staticmethod
+    def detect_dominant_colors(img_array, num_colors=5):
+        # Reshape the image to be a list of pixels
+        pixels = img_array.reshape(-1, 3)
+        
+        # Use K-means to find dominant colors
+        criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 100, 0.2)
+        _, labels, centers = cv2.kmeans(
+            pixels.astype(np.float32), 
+            num_colors, 
+            None, 
+            criteria, 
+            10, 
+            cv2.KMEANS_RANDOM_CENTERS
+        )
+        
+        # Count occurrences of each color
+        unique, counts = np.unique(labels, return_counts=True)
+        color_frequencies = dict(zip(unique, counts))
+        
+        # Sort colors by frequency
+        dominant_colors = [centers[i].astype(int) for i in sorted(color_frequencies, key=color_frequencies.get, reverse=True)]
+        
+        return dominant_colors
 
 class Filter:
     @staticmethod
@@ -36,7 +62,6 @@ class Filter:
 
     @staticmethod
     def pencil_sketch(img_array):
-    # cv2.pencilSketch returns two outputs: grayscale and color sketch
         sketch_gray, sketch_color = cv2.pencilSketch(img_array, sigma_s=20, sigma_r=0.1, shade_factor=0.01)
         return sketch_color
  
@@ -51,67 +76,133 @@ class Filter:
         return cv2.GaussianBlur(img_array, (21, 21), 10)
 
     @staticmethod
-    def bfs_fill(img_array, start_pixel, color):
-        height, width = img_array.shape[:2]
-        visited = np.zeros((height, width), dtype=bool)
-        queue = deque([start_pixel])
-        while queue:
-            x, y = queue.popleft()
-            if visited[x, y]:
-                continue
-            visited[x, y] = True
-            img_array[x, y] = color
-            for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
-                nx, ny = x + dx, y + dy
-                if 0 <= nx < height and 0 <= ny < width and not visited[nx, ny]:
-                    queue.append((nx, ny))
+    def color_replace(img_array, original_color, replacement_color, tolerance=30):
+        img_array = np.array(img_array)
+        mask = np.all(np.abs(img_array - original_color) <= tolerance, axis=-1)
+
+        # Convert colors to numpy arrays
+        original_color = np.array(original_color)
+        replacement_color = np.array(replacement_color)
+        
+        # Replace those pixels
+        img_array[mask] = replacement_color
+        
         return img_array
 
+def main():
+    st.title("🖼️ Advanced Image Processing App")
+    
+    # Sidebar for file upload and processing
+    st.sidebar.header("Image Processing Toolkit")
+    uploaded_file = st.sidebar.file_uploader(
+        "Upload an Image", 
+        type=["jpg", "png", "jpeg"], 
+        help="Supports JPG, PNG, and JPEG formats"
+    )
 
-st.title("Image Filtering App")
-uploaded_file = st.file_uploader("Choose an image...", type=["jpg", "png", "jpeg"])
+    if uploaded_file is not None:
+        # Read image
+        original_image = Image.open(uploaded_file)
+        img_array = np.array(original_image.convert("RGB"))
 
-if uploaded_file is not None:
-    original_image = Image.open(uploaded_file)
-    img_array = np.array(original_image.convert("RGB"))
+        # Sidebar processing options
+        processing_type = st.sidebar.selectbox(
+            "Processing Category", 
+            ["Image Filters", "Color Manipulation"]
+        )
 
-    filter_category = st.selectbox("Choose Filter Category:", ["General", "Instagram"])
+        if processing_type == "Image Filters":
+            # Restore previous filter categories
+            filter_category = st.sidebar.selectbox(
+                "Choose Filter Category:", 
+                ["General", "Instagram"]
+            )
 
-    filters = {
-        "General": {
-            "Gaussian Blur": Filter.apply_gaussian_blur,
-            "Grayscale": Filter.color2gray,
-            "Emboss": Filter.emboss,
-            "Bilateral": Filter.bilateral,
-            "Edge Detection": Filter.edge_detection,
-            "Sepia": Filter.sepia,
-            "Pencil sketch": Filter.pencil_sketch
-        },
-        "Instagram": {
-            "Vivid": Filter.vivid,
-            "Dream": Filter.dream
-        }
-    }
+            filters = {
+                "General": {
+                    "Gaussian Blur": Filter.apply_gaussian_blur,
+                    "Grayscale": Filter.color2gray,
+                    "Emboss": Filter.emboss,
+                    "Bilateral": Filter.bilateral,
+                    "Edge Detection": Filter.edge_detection,
+                    "Sepia": Filter.sepia,
+                    "Pencil sketch": Filter.pencil_sketch
+                },
+                "Instagram": {
+                    "Vivid": Filter.vivid,
+                    "Dream": Filter.dream
+                }
+            }
 
-    selected_filter = st.selectbox("Select a Filter:", list(filters[filter_category].keys()))
-    intensity = st.slider("Adjust Intensity", 1, 100, 50) if selected_filter in ["Gaussian Blur", "Bilateral"] else None
-    selective_fill = st.checkbox("Apply Selective Fill")
+            selected_filter = st.sidebar.selectbox(
+                "Select a Filter:", 
+                list(filters[filter_category].keys())
+            )
+            
+            # Intensity slider for certain filters
+            intensity = st.sidebar.slider("Adjust Intensity", 1, 100, 50) \
+                if selected_filter in ["Gaussian Blur", "Bilateral"] else None
 
-    st.image(original_image, caption="Original Image", use_column_width=True)
-    filter_func = filters[filter_category][selected_filter]     
+            if st.sidebar.button("Apply Filter"):
+                # Get and apply filter
+                filter_func = filters[filter_category][selected_filter]
+                
+                if selected_filter == "Gaussian Blur":
+                    filtered_img = filter_func(
+                        img_array, 
+                        kernel_size=intensity if intensity % 2 == 1 else intensity + 1
+                    )
+                elif selected_filter == "Bilateral":
+                    filtered_img = filter_func(img_array, intensity)
+                else:
+                    filtered_img = filter_func(img_array)
+                
+                # Compare images
+                st.image(filtered_img, caption=f"Processed: {selected_filter}")
 
-    if st.button("Apply Filter"):
-        if selected_filter == "Gaussian Blur":
-            filtered_array = filter_func(img_array, kernel_size=intensity if intensity % 2 == 1 else intensity + 1)
-        elif selected_filter == "Bilateral":
-            filtered_array = filter_func(img_array, intensity)
-        else:
-            filtered_array = filter_func(img_array)
+        if processing_type == "Color Manipulation":
+            # Detect dominant colors
+            dominant_colors = ColorDetector.detect_dominant_colors(img_array)
+            
+            # Display dominant colors
+            st.sidebar.subheader("Top 5 Dominant Colors")
+            for idx, color in enumerate(dominant_colors):
+                st.sidebar.write(f"Color {idx + 1}: RGB{tuple(color)}")
 
-        if selective_fill:
-            start_pixel = (random.randint(0, img_array.shape[0] - 1), random.randint(0, img_array.shape[1] - 1))
-            selective_color = [random.randint(0, 255) for _ in range(3)]
-            filtered_array = Filter.bfs_fill(filtered_array, start_pixel, selective_color)
+            # Color replacement UI
+            st.sidebar.subheader("Color Replacement")
+            color_to_replace_index = st.sidebar.selectbox(
+                "Select Color to Replace", 
+                range(5), 
+                format_func=lambda x: f"RGB{tuple(dominant_colors[x])}"
+            )
+            
+            color_to_replace = dominant_colors[color_to_replace_index]
+            
+            # Color picker for replacement
+            replacement_color = st.sidebar.color_picker("Choose Replacement Color")
+            
+            # Convert hex to RGB
+            replacement_color_rgb = tuple(int(replacement_color[i:i+2], 16) for i in (1, 3, 5))
 
-        filtered_image = Image.fromarray(filtered_array)
-        image_comparison(img1=original_image, img2=filtered_image, label1="Original", label2=selected_filter)
+            # Tolerance slider
+            tolerance = st.sidebar.slider("Color Similarity Tolerance", 1, 100, 30)
+            
+            if st.sidebar.button("Replace Color"):
+                # Apply color replacement
+                replaced_img = Filter.color_replace(
+                    img_array.copy(), 
+                    color_to_replace, 
+                    replacement_color_rgb, 
+                    tolerance
+                )
+                
+                # Display results
+                st.image(replaced_img, caption="Color Replaced Image")
+
+        # Always show original image
+        st.header("Original Image")
+        st.image(original_image, use_column_width=True)
+
+if __name__ == "__main__":
+    main()
